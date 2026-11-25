@@ -1,0 +1,47 @@
+# Template file for 'solidcraft'
+pkgname=solidcraft
+version=0.49.1
+revision=1
+archs="x86_64* aarch64*"
+build_style=cargo
+make_build_args="-p solidcraft -p solidcraft-cli --no-default-features
+ --features solidcraft/raytrace-cpu,solidcraft/bundled-render-library,solidcraft/profile,solidcraft-cli/raytrace-cpu,solidcraft-cli/profile"
+hostmakedepends="pkg-config"
+makedepends="libzstd-devel"
+depends="libX11 libXcursor libXi libxkbcommon libxkbcommon-x11 wayland
+ vulkan-loader libglvnd hicolor-icon-theme"
+short_desc="Parametric 3D CAD application built in pure Rust"
+maintainer="Filip Rojek <filip@filiprojek.cz>"
+license="(MIT OR Apache-2.0) AND custom:SolidCraft-Brand"
+homepage="https://solidcraft.io"
+changelog="https://github.com/tangency-labs/solidcraft/releases"
+distfiles="https://github.com/tangency-labs/solidcraft/archive/refs/tags/v${version}.tar.gz"
+checksum=84224d0da704c4187c17989e186497e00c4190ed82d0b99bf60b6bde10afaa65
+make_check=no
+
+export ZSTD_SYS_USE_PKG_CONFIG=1
+
+do_install() {
+	local _appid=io.tangencylabs.solidcraft _s
+
+	vbin target/${RUST_TARGET}/release/solidcraft
+	vbin target/${RUST_TARGET}/release/solidcraft-cli
+
+	vinstall assets/platforms/linux/${_appid}.desktop 644 usr/share/applications
+	vinstall assets/platforms/linux/${_appid}.mime.xml 644 usr/share/mime/packages ${_appid}.xml
+	sed -e "s/@VERSION@/${version}/g" \
+		-e "s/@DATE@/$(date -u -d @${SOURCE_DATE_EPOCH:-0} +%F)/g" \
+		assets/platforms/linux/${_appid}.metainfo.xml.in > ${_appid}.metainfo.xml
+	vinstall ${_appid}.metainfo.xml 644 usr/share/metainfo
+
+	for _s in 16 24 32 48 64 128 256 512; do
+		vinstall assets/icons/app/linux/exports/hicolor/${_s}x${_s}/apps/${_appid}.png 644 \
+			usr/share/icons/hicolor/${_s}x${_s}/apps
+	done
+
+	vdoc README.md
+	vdoc THIRD-PARTY-LICENSES.txt
+	vlicense LICENSE-MIT
+	vlicense LICENSE-BRAND
+	vlicense NOTICE
+}
