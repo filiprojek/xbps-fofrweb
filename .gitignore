@@ -1,0 +1,7 @@
+# Machine/server specific settings, see config.local.sh.example
+/config.local.sh
+
+# Symlinks into the build worktree, made by ./xbps-src for xtools (xi, xgensum)
+/hostdir
+/common/environment
+/common/cross-profiles

@@ -1,0 +1,63 @@
+#!/bin/sh
+# xbps-src for the overlay. xtools (xdistdir) take a git top level with an executable
+# xbps-src for a void-packages tree, so xnew, xlint, xgensum, xbump, xrevbump and xi work
+# here as in void-packages.
+#
+# `xbps-src [flags] show-var XBPS_DISTDIR` answers with this directory. Anything else copies
+# the overlay (srcpkgs/, common/shlibs) into the build worktree and runs the real xbps-src
+# there, e.g. ./xbps-src pkg foo, ./xbps-src -a aarch64 pkg foo. Packages land in the
+# worktree's hostdir/binpkgs, reachable here as ./hostdir.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=config.sh
+. "$here/config.sh"
+
+die() { printf 'xbps-src (overlay): %s\n' "$*" >&2; exit 1; }
+
+# xdistdir asks for the tree; flags may come first (xgensum passes -H <hostdir>)
+prev='' last=''
+for arg; do prev=$last; last=$arg; done
+if [ "$prev" = show-var ] && [ "$last" = XBPS_DISTDIR ]; then
+	printf '%s\n' "$here"
+	exit 0
+fi
+
+[ -x "$BUILD_DIR/xbps-src" ] || die "no build worktree at $BUILD_DIR, run: $here/repo.sh setup"
+
+# Symlinks (gitignored) for xtools reading the tree: xi wants hostdir/binpkgs, xgensum
+# build-style environments and cross profiles. Real files/directories are never replaced
+link() {
+	if [ "$(readlink "$2" 2>/dev/null)" != "$1" ]; then
+		rm -f "$2"
+		ln -s "$1" "$2"
+	fi
+}
+mkdir -p "$here/common" "$BUILD_DIR/hostdir"
+link "$BUILD_DIR/hostdir" "$here/hostdir"
+link "$BUILD_DIR/common/environment" "$here/common/environment"
+link "$BUILD_DIR/common/cross-profiles" "$here/common/cross-profiles"
+
+# One run at a time: the lock stays held by the real xbps-src (fd 9 survives exec)
+exec 9> "$BUILD_LOCK"
+if ! flock -n 9; then
+	echo "xbps-src (overlay): waiting for another run in $BUILD_DIR" >&2
+	flock 9
+fi
+
+# Worktree back to upstream's files, then each overlay entry replaces upstream's whole
+# directory of that name (no merging of patches/files); overlay shlibs lines appended
+git -C "$BUILD_DIR" checkout -q -- srcpkgs common/shlibs
+git -C "$BUILD_DIR" clean -fdq -- srcpkgs
+for src in "$here"/srcpkgs/*; do
+	if [ -e "$src" ] || [ -L "$src" ]; then
+		rm -rf "${BUILD_DIR:?}/srcpkgs/${src##*/}"
+		cp -RP "$src" "$BUILD_DIR/srcpkgs/"
+	fi
+done
+if [ -f "$here/common/shlibs" ]; then
+	cat "$here/common/shlibs" >> "$BUILD_DIR/common/shlibs"
+fi
+
+cd "$BUILD_DIR"
+exec ./xbps-src "$@"

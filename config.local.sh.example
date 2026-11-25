@@ -1,0 +1,7 @@
+# Copy to config.local.sh (gitignored) and adjust. config.sh loads it before its defaults;
+# variables from the environment still win, hence the ${VAR:-value} form.
+
+REMOTE=${REMOTE:-user@example.org:/srv/www/xbps/current}       # required to publish
+#VOID_PACKAGES=${VOID_PACKAGES:-$HOME/src/void-packages}
+#BUILD_DIR=${BUILD_DIR:-$HOME/src/void-packages-fofrweb}
+#PASS_ENTRY=${PASS_ENTRY:-xbps/signing-key}

@@ -1,0 +1,2 @@
+# Overlay additions to void-packages' common/shlibs, appended to the build worktree's copy
+# by ./xbps-src: "<soname> <pkgname>-<version>_<revision>" for libraries packaged here
