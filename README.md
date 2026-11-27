@@ -38,6 +38,7 @@ This directory looks like a void-packages tree to xtools, see [below](#xtools).
 | `hostdir`, `common/environment`, `common/cross-profiles` | Symlinks into the worktree made by `xbps-src`, gitignored (for `xi`, `xgensum`) |
 | `site/` | The website: `index.html` (template) and `gen.py`, which fills it from the repodata |
 | `.github/ISSUE_TEMPLATE/package-request.yml` | Issue form behind the site's "Request a package" button |
+| `.github/pull_request_template.md` | Short checklist prefilled in new pull requests |
 | `.github/workflows/` | GitHub CI, see [below](#github-ci) |
 | `ci/` | Scripts the workflows run: build environment, changed packages, build, update check, upstream watch |
 | `tests/test.sh` | Offline test of the shim, build, publish/remove/release, signing, the website and `ci/changed.sh` |
