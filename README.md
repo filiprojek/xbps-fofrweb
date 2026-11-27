@@ -14,7 +14,7 @@ sudo xbps-install -S
 The first sync asks to import the signing key. Accept it only if it reads:
 
 - signed by: `fofrweb.net xbps repository <admin@fofrweb.net>`
-- fingerprint: `(fill in from ./repo.sh fingerprint)`
+- fingerprint: `20:24:9a:06:48:55:ca:61:42:51:12:1b:e4:17:7f:c8`
 
 **Order matters.** xbps reads `/etc/xbps.d` and `/usr/share/xbps.d` in alphabetical order,
 and the first repository that has a package wins, whatever the version. `20-fofrweb.conf`
