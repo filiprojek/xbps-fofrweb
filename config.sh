@@ -29,7 +29,7 @@ case ${REMOTE%/} in
 esac
 SITE_REMOTE=${SITE_REMOTE-$_site_default}
 REPO_URL=${REPO_URL:-https://xbps.fofrweb.net/current}         # what clients put into xbps.d
-SOURCE_URL=${SOURCE_URL:-https://github.com/filiprojek/xbps-fofrweb}  # this repository on GitHub
+SOURCE_URL=${SOURCE_URL:-https://github.com/fofrweb/xbps-packages}  # this repository on GitHub
 
 # Serialises everything that rewrites or builds in the worktree (hostdir is gitignored there)
 BUILD_LOCK=$BUILD_DIR/hostdir/.xbps-fofrweb.lock
