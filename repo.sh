@@ -14,6 +14,7 @@
 #   remove <name>...       drop packages (binary package names) from the repository, upload
 #   pull                   refresh the local copy of the published repository
 #   list                   show what the repository holds, per arch
+#   site                   regenerate and upload only the website (also done by publish/remove)
 #   keygen                 create the signing key in pass, print its fingerprint
 #   fingerprint            print the signing key's fingerprint
 #
@@ -26,7 +27,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 key=
 tmpkey=
-cleanup() { if [ -n "$tmpkey" ]; then rm -f "$tmpkey"; fi; }
+sitedir=
+cleanup() {
+	if [ -n "$tmpkey" ]; then rm -f "$tmpkey"; fi
+	if [ -n "$sitedir" ]; then rm -rf "$sitedir"; fi
+}
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
@@ -168,7 +173,26 @@ push() {
 		break
 	done
 	msg "uploading to $REMOTE"
-	rsync -rt --delay-updates --delete-after "$STAGING/" "$REMOTE/"
+	# -O: no times on directories, which only their owner may set (shared group directories)
+	rsync -rtO --delay-updates --delete-after "$STAGING/" "$REMOTE/"
+	push_site
+}
+
+# Website from the staged repodata, uploaded beside the repository directory. No --delete:
+# SITE_REMOTE holds the repository directory itself. -O: SITE_REMOTE may belong to another
+# user (e.g. root, writable through a group), and only the owner may set its times
+push_site() {
+	if [ -z "$SITE_REMOTE" ]; then return 0; fi
+	sitedir=$(mktemp -d "${TMPDIR:-/tmp}/xbps-fofrweb-site.XXXXXX")
+	python3 -I "$here/site/gen.py" --repo "$STAGING" --archs "$ARCHS" \
+		--repo-url "$REPO_URL" --source-url "$SOURCE_URL" --srcpkgs "$here/srcpkgs" --out "$sitedir"
+	msg "uploading website to $SITE_REMOTE"
+	rsync -rtO --chmod=Fa+r --delay-updates "$sitedir/" "$SITE_REMOTE/"
+}
+
+cmd_site() {
+	cmd_pull
+	push_site
 }
 
 # Register the staged packages of one arch (and noarch), drop what is obsolete, sign
@@ -287,7 +311,7 @@ fi
 command=$1
 shift
 case $command in
-setup | update | import | build | publish | remove | pull | list | keygen | fingerprint)
+setup | update | import | build | publish | remove | pull | list | site | keygen | fingerprint)
 	"cmd_$command" "$@" ;;
 *) die "unknown command: $command (run without arguments for help)" ;;
 esac

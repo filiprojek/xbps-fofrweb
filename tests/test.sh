@@ -5,7 +5,8 @@
 # Part 2: repo.sh publish/remove with dummy packages (x86_64, aarch64, noarch) made by
 # xbps-create, a throwaway signing key and a local directory instead of the server; at the end the
 # result is served over HTTP and xbps-install -S checks the signature like a client.
-# Needs xbps, xtools, git, openssl, rsync, python3. Touches neither pass nor the server.
+# Part 3: the website, generated on publish/remove beside the repository directory.
+# Needs xbps, xtools, git, openssl, rsync, python3 (3.14+). Touches neither pass nor the server.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,6 +34,7 @@ export STUB_LOG="$t/stub.log"
 o=$t/overlay
 mkdir -p "$o/srcpkgs/hello" "$o/srcpkgs/hello-data" "$o/common"
 cp "$here/repo.sh" "$here/xbps-src" "$here/config.sh" "$here/.gitignore" "$o/"
+cp -R "$here/site" "$o/"
 printf 'pkgname=hello\nversion=1.0\nrevision=1\n' > "$o/srcpkgs/hello/template"
 ln -s hello "$o/srcpkgs/hello-doc"
 printf 'pkgname=hello-data\nversion=1.0\nrevision=1\narchs=noarch\n' > "$o/srcpkgs/hello-data/template"
@@ -104,21 +106,71 @@ ok "repo.sh build: $native + aarch64, noarch once"
 binpkgs=$b/hostdir/binpkgs
 mkdir -p "$binpkgs" "$t/destdir/usr/share/hello"
 echo hi > "$t/destdir/usr/share/hello/hi"
-mkpkg() { # <pkgver> <arch>
-	(cd "$binpkgs" && xbps-create -q -A "$2" -n "$1" -s "test package $1" "$t/destdir")
+mkpkg() { # <pkgver> <arch> [short_desc]
+	(cd "$binpkgs" && xbps-create -q -A "$2" -n "$1" -s "${3:-test package $1}" "$t/destdir")
+}
+# Markup in a description must reach the page as text, not as HTML
+export ODD_DESC='data </script><b>"bold"</b> & more'
+site_has() { # <python expression over p = {name: entry} of packages.json>
+	python3 -I -c '
+import json, os, sys
+p = {e["name"]: e for e in json.load(open(sys.argv[1]))["packages"]}
+sys.exit(0 if eval(sys.argv[2]) else 1)' "$t/packages.json" "$1"
 }
 openssl genpkey -quiet -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$SIGNING_KEY_FILE"
 repo() { "$o/repo.sh" "$@" > "$t/out" 2>&1 || { cat "$t/out"; fail "repo.sh $*"; }; }
 
 # 6. first publish: both arches, subpackage, noarch, signatures
 for a in "$native" aarch64; do mkpkg hello-1.0_1 "$a"; mkpkg hello-doc-1.0_1 "$a"; done
-mkpkg hello-data-1.0_1 noarch
+mkpkg hello-data-1.0_1 noarch "$ODD_DESC"
 repo publish
 for f in "$native-repodata" aarch64-repodata "hello-1.0_1.$native.xbps" hello-1.0_1.aarch64.xbps \
 	"hello-doc-1.0_1.$native.xbps" hello-data-1.0_1.noarch.xbps hello-1.0_1.aarch64.xbps.sig2; do
 	have "$f"
 done
 ok "publish: both arches, subpackage, noarch, signatures"
+
+# 6b. the website beside the repository (SITE_REMOTE defaults to REMOTE's parent): package
+# data per arch, the signing key fingerprint, request link, markup escaped
+fp=$("$o/repo.sh" fingerprint)
+[ -f "$t/index.html" ] || fail "no index.html beside the repository"
+[ -f "$t/packages.json" ] || fail "no packages.json beside the repository"
+lacks index.html
+site_has 'sorted(p) == ["hello", "hello-data", "hello-doc"]' || { cat "$t/packages.json"; fail "site package names"; }
+site_has "sorted(p['hello']['archs']) == sorted(['$native', 'aarch64'])" || fail "site: hello archs"
+site_has "p['hello-doc']['source'] == 'hello'" || fail "site: hello-doc source package"
+site_has "p['hello-data']['archs'] == ['noarch']" || fail "site: hello-data noarch"
+site_has "p['hello-data']['desc'] == os.environ['ODD_DESC']" || fail "site: description not verbatim"
+grep -q "$fp" "$t/index.html" || fail "fingerprint $fp not on the page"
+grep -q 'hello-data' "$t/index.html" || fail "package data not embedded in the page"
+grep -q '/issues/new' "$t/index.html" || fail "no package request link"
+if grep -q '</script><b>' "$t/index.html"; then fail "description markup not escaped"; fi
+ok "site: index.html + packages.json beside the repository, fingerprint, links, escaping"
+
+# 6c. latest first: newest package file (time it was added) shown, the rest collapsed
+touch -d '2020-01-01 12:00 UTC' "$STAGING"/*.xbps
+touch -d '2021-06-01 12:00 UTC' "$STAGING/hello-data-1.0_1.noarch.xbps"
+python3 -I "$o/site/gen.py" --repo "$STAGING" --archs "$native aarch64" --repo-url http://x \
+	--source-url http://x --srcpkgs "$o/srcpkgs" --out "$t/gen" --latest 1
+head=$(sed '/<details/q' "$t/gen/index.html")
+rest=$(sed -n '/<details/,$p' "$t/gen/index.html")
+case $head in *'id="hello-data"'*) ;; *) fail "newest package not listed before the collapsed part" ;; esac
+case $head in *'id="hello-doc"'*) fail "older package not collapsed" ;; esac
+case $rest in *'id="hello-doc"'*) ;; *) fail "older package missing from the collapsed part" ;; esac
+case $rest in *'id="hello-data"'*) fail "newest package listed twice" ;; esac
+grep -q '2021-06-01' "$t/gen/index.html" || fail "date of the newest package not shown"
+python3 -I -c 'import json,sys; p={e["name"]: e for e in json.load(open(sys.argv[1]))["packages"]}; sys.exit(not p["hello-data"]["updated"].startswith("2021-06-01"))' \
+	"$t/gen/packages.json" || fail "packages.json: updated"
+ok "site: latest package first with its date, the rest collapsed"
+
+# 6d. an unsigned repository (empty index-meta.plist) still gets a page
+mkdir -p "$t/unsigned"
+cp "$STAGING/hello-data-1.0_1.noarch.xbps" "$t/unsigned/"
+XBPS_TARGET_ARCH=$native xbps-rindex -a "$t/unsigned/hello-data-1.0_1.noarch.xbps" > /dev/null
+python3 -I "$o/site/gen.py" --repo "$t/unsigned" --archs "$native" --repo-url http://x \
+	--source-url http://x --out "$t/gen-unsigned" || fail "gen.py on an unsigned repository"
+grep -q 'not signed yet' "$t/gen-unsigned/index.html" || fail "unsigned repository not marked as such"
+ok "site: unsigned repository"
 
 # 7. update only the native arch: its old file goes, aarch64 and noarch stay
 mkpkg hello-1.1_1 "$native"
@@ -136,7 +188,10 @@ repo remove hello-doc
 lacks "hello-doc-1.0_1.$native.xbps"
 lacks hello-doc-1.0_1.aarch64.xbps
 have "hello-1.1_1.$native.xbps"
-ok "remove: subpackage gone on both arches"
+site_has '"hello-doc" not in p' || fail "site still lists hello-doc after remove"
+site_has "p['hello']['versions'] == {'$native': '1.1_1', 'aarch64': '1.0_1'}" ||
+	{ cat "$t/packages.json"; fail "site: versions per arch"; }
+ok "remove: subpackage gone on both arches, site updated"
 
 # 9. index contents per arch
 repo list

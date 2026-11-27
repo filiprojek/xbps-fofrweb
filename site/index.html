@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xbps.fofrweb.net</title>
+<style>
+:root { color-scheme: light dark; }
+body { max-width: 46em; margin: auto; padding: 0 1em; font-family: sans-serif; line-height: 1.5; }
+pre { overflow-x: auto; }
+code { overflow-wrap: anywhere; }
+input { width: 100%; font: inherit; box-sizing: border-box; }
+</style>
+
+<h1>xbps.fofrweb.net</h1>
+<p>Unofficial <a href="https://voidlinux.org/" target="_blank">Void Linux</a> package repository with packages
+that are not in the official one, for @ARCHS@ (glibc). Built from the templates on
+<a href="@SOURCE_URL@" target="_blank">GitHub</a>.</p>
+
+<h2>Use it</h2>
+<pre>echo 'repository=@REPO_URL@' | sudo tee /etc/xbps.d/20-fofrweb.conf
+sudo xbps-install -S
+sudo xbps-install &lt;package&gt;</pre>
+<p>Accept the key on the first sync only if it shows:<br>
+signed by: @SIGNED_BY@<br>
+fingerprint: <code>@FINGERPRINT@</code></p>
+<p>xbps uses the first repository in <code>/etc/xbps.d</code> (alphabetical) that has a package,
+so with <code>20-</code> the official build wins once Void ships it. Use <code>00-fofrweb.conf</code>
+to prefer the builds from here.</p>
+
+<h2>Packages (@COUNT@)</h2>
+<input id="q" type="search" placeholder="Search" aria-label="Search packages" hidden>
+<p id="none" hidden>Nothing found. <a href="@REQUEST_URL@" target="_blank">Request it</a>.</p>
+<p>Latest:</p>
+<ul>
+@LATEST@
+</ul>
+@MORE@
+<p>Also as <a href="packages.json" target="_blank">packages.json</a> and <a href="@REPO_URL@/" target="_blank">raw files</a>.</p>
+
+<h2>Request a package</h2>
+<p><a href="@REQUEST_URL@" target="_blank">Open an issue</a> with its name, homepage, licence and why it's
+needed here. Packages the official repository would take belong in
+<a href="https://github.com/void-linux/void-packages" target="_blank">void-packages</a>.</p>
+
+<h2>Contribute</h2>
+<p>Packages are ordinary void-packages templates in <code>srcpkgs/</code>. Fork
+<a href="@SOURCE_URL@" target="_blank">the repository</a>, set it up as its README says, add
+<code>srcpkgs/&lt;package&gt;/template</code> (<code>xnew</code>, <code>xgensum -i</code>,
+<code>xlint</code>), build it with <code>./xbps-src pkg &lt;package&gt;</code> and open a pull
+request.</p>
+
+<hr>
+<p><small>Updated @GENERATED@. Not affiliated with the Void Linux project.</small></p>
+
+<script>
+const q = document.getElementById("q"), none = document.getElementById("none");
+const items = [...document.querySelectorAll("li[id]")], more = document.getElementById("more");
+q.hidden = false;
+q.oninput = () => {
+  const s = q.value.toLowerCase();
+  let n = 0;
+  for (const li of items) n += !(li.hidden = !li.textContent.toLowerCase().includes(s));
+  none.hidden = n > 0;
+  if (more) more.open = s !== "";
+};
+</script>

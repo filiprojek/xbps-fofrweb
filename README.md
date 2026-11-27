@@ -36,7 +36,9 @@ This directory looks like a void-packages tree to xtools, see [below](#xtools).
 | `config.sh` | Settings for both scripts (void-packages clone, build worktree, arches, upload target, signing key) with neutral defaults |
 | `config.local.sh` | Your values, gitignored; start from `config.local.sh.example`. The environment overrides both files |
 | `hostdir`, `common/environment`, `common/cross-profiles` | Symlinks into the worktree made by `xbps-src`, gitignored (for `xi`, `xgensum`) |
-| `tests/test.sh` | Offline test of the shim, build, publish/remove and signing |
+| `site/` | The website: `index.html` (template) and `gen.py`, which fills it from the repodata |
+| `.github/ISSUE_TEMPLATE/package-request.yml` | Issue form behind the site's "Request a package" button |
+| `tests/test.sh` | Offline test of the shim, build, publish/remove, signing and the website |
 
 Outside this repository (names from `config.sh`):
 
@@ -47,6 +49,8 @@ Outside this repository (names from `config.sh`):
 | `STAGING` | Local copy of the published repository, pulled before every change |
 | `REMOTE` | Where the repository is uploaded with rsync: `host:dir` over SSH, or a local directory. Any static web server serving that directory will do |
 | `PASS_ENTRY` | pass entry holding the RSA signing key (PEM). It is copied to `$XDG_RUNTIME_DIR` (tmpfs) only while signing |
+| `SITE_REMOTE` | Where the website goes; default: the directory above `REMOTE`, so the page is the web root and the repository is below it. Empty: no website |
+| `REPO_URL`, `SOURCE_URL` | The repository URL clients use and this repository on GitHub, as shown on the website |
 
 ## One-time setup
 
@@ -64,6 +68,7 @@ Outside this repository (names from `config.sh`):
 ./repo.sh build witr           # x86_64 natively, aarch64 cross-compiled
 ./repo.sh publish witr         # index, sign, upload; no names = all of srcpkgs/
 ./repo.sh list                 # what the repository holds, per arch
+./repo.sh site                 # regenerate and upload only the website
 ```
 
 - **Changing a published package:** bump `revision` (or `version`). A pkgver that is already
@@ -81,6 +86,16 @@ Outside this repository (names from `config.sh`):
 - **Signing on a machine you reach over SSH:** pass there needs your local gpg-agent
   forwarded, since the smartcard stays local. `SIGNING_KEY_FILE=<pem>` signs with a key file
   instead of pass.
+
+## Website
+
+Every `publish` and `remove` regenerates the website from the repodata it just uploaded and
+puts it into `SITE_REMOTE`: `index.html` (what the repository is, how to add it, the signing
+key, the 5 most recently published packages with the rest collapsed and a search over all of them, how to contribute, a link to request a package with a GitHub
+issue) and `packages.json` (the same list for scripts). So it always shows what clients get,
+and the fingerprint on it comes from the public key in the repodata. `site/gen.py` needs
+Python 3.14+ (zstd in `tarfile`) and `ssh-keygen`. The page is plain HTML with a few lines of CSS and a search script, nothing external. To
+change the page, edit `site/index.html` (placeholders `@NAME@`) and run `./repo.sh site`.
 
 ## xtools
 
@@ -114,3 +129,6 @@ the build.
 - with dummy x86_64, aarch64 and noarch packages and a throwaway key: obsolete versions are
   removed per arch, subpackages can be removed, and an `xbps-install` client accepts the
   repository signature and the key fingerprint `repo.sh` reports
+- the website beside the repository after publish and remove: every package with its arches,
+  versions and source package, the fingerprint, the request link, and markup in a
+  description escaped

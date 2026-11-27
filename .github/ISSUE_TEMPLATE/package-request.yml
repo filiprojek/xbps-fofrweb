@@ -1,0 +1,48 @@
+name: Package request
+description: Ask for a package to be added to xbps.fofrweb.net
+title: "Package request: "
+labels: ["package request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Packages the official Void repository would accept are better requested or sent to
+        [void-packages](https://github.com/void-linux/void-packages) first.
+  - type: input
+    id: name
+    attributes:
+      label: Package name
+      placeholder: foo
+    validations:
+      required: true
+  - type: input
+    id: homepage
+    attributes:
+      label: Homepage or source
+      placeholder: https://example.org/foo
+    validations:
+      required: true
+  - type: input
+    id: license
+    attributes:
+      label: Licence
+      description: The licence must allow redistributing builds.
+      placeholder: MIT
+  - type: dropdown
+    id: archs
+    attributes:
+      label: Architectures
+      multiple: true
+      options:
+        - x86_64
+        - aarch64
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is needed here
+      description: For example, rejected or pending upstream (link the void-packages PR or issue), or not suitable for the official repository.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Build hints, an existing template, a void-packages PR to take commits from.

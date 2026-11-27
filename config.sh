@@ -20,5 +20,16 @@ SIGNED_BY=${SIGNED_BY:-fofrweb.net xbps repository <admin@fofrweb.net>}
 SIGNING_KEY_FILE=${SIGNING_KEY_FILE:-}                         # PEM file to use instead of pass
 ALLOW_RESTRICTED=${ALLOW_RESTRICTED:-no}                       # yes: publish restricted=yes packages
 
+# Website (site/gen.py), uploaded with every publish/remove. SITE_REMOTE defaults to the
+# directory above REMOTE, so the page is at the web root and the repository below it;
+# empty (REMOTE without a parent directory, or SITE_REMOTE=) means no website
+case ${REMOTE%/} in
+*/*) _site_default=${REMOTE%/}; _site_default=${_site_default%/*} ;;
+*) _site_default= ;;
+esac
+SITE_REMOTE=${SITE_REMOTE-$_site_default}
+REPO_URL=${REPO_URL:-https://xbps.fofrweb.net/current}         # what clients put into xbps.d
+SOURCE_URL=${SOURCE_URL:-https://github.com/filiprojek/xbps-fofrweb}  # this repository on GitHub
+
 # Serialises everything that rewrites or builds in the worktree (hostdir is gitignored there)
 BUILD_LOCK=$BUILD_DIR/hostdir/.xbps-fofrweb.lock
