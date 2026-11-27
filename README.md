@@ -38,7 +38,9 @@ This directory looks like a void-packages tree to xtools, see [below](#xtools).
 | `hostdir`, `common/environment`, `common/cross-profiles` | Symlinks into the worktree made by `xbps-src`, gitignored (for `xi`, `xgensum`) |
 | `site/` | The website: `index.html` (template) and `gen.py`, which fills it from the repodata |
 | `.github/ISSUE_TEMPLATE/package-request.yml` | Issue form behind the site's "Request a package" button |
-| `tests/test.sh` | Offline test of the shim, build, publish/remove, signing and the website |
+| `.github/workflows/` | GitHub CI, see [below](#github-ci) |
+| `ci/` | Scripts the workflows run: build environment, changed packages, build, update check, upstream watch |
+| `tests/test.sh` | Offline test of the shim, build, publish/remove/release, signing, the website and `ci/changed.sh` |
 
 Outside this repository (names from `config.sh`):
 
@@ -51,6 +53,7 @@ Outside this repository (names from `config.sh`):
 | `PASS_ENTRY` | pass entry holding the RSA signing key (PEM). It is copied to `$XDG_RUNTIME_DIR` (tmpfs) only while signing |
 | `SITE_REMOTE` | Where the website goes; default: the directory above `REMOTE`, so the page is the web root and the repository is below it. Empty: no website |
 | `REPO_URL`, `SOURCE_URL` | The repository URL clients use and this repository on GitHub, as shown on the website |
+| `GH`, `GH_REPO` | The gh CLI and `owner/name` on GitHub (default: from `SOURCE_URL`), for `release` |
 
 ## One-time setup
 
@@ -61,6 +64,16 @@ Outside this repository (names from `config.sh`):
 4. A static web server for the directory `REMOTE` points at, over HTTPS.
 
 ## Workflow
+
+Through GitHub (CI builds, you sign and publish):
+
+```sh
+# pull request with srcpkgs/witr/template -> CI lints, tests, test-builds; merge it
+./repo.sh release              # newest CI build on master: verify, sign, upload
+./repo.sh release <commit>     # the CI build of a given commit on master
+```
+
+Entirely local:
 
 ```sh
 ./repo.sh import witr witr     # srcpkgs/witr from branch witr of the void-packages clone
@@ -86,6 +99,39 @@ Outside this repository (names from `config.sh`):
 - **Signing on a machine you reach over SSH:** pass there needs your local gpg-agent
   forwarded, since the smartcard stays local. `SIGNING_KEY_FILE=<pem>` signs with a key file
   instead of pass.
+
+## GitHub CI
+
+| Workflow | When | What |
+|---|---|---|
+| `check.yml` | every pull request | shellcheck, `tests/test.sh`, `xlint` and a test build (x86_64, aarch64 cross) of the changed packages. Nothing is kept |
+| `build.yml` | push to `master` changing `srcpkgs/`, or by hand with a package list | builds the changed packages from exactly that commit, attests their provenance, keeps them as artifacts for 30 days |
+| `update-check.yml` | Mondays, or by hand | `xbps-src update-check` per package; a pull request `update/<pkg>` with the new version and checksum, or an issue when `xgensum` fails |
+| `upstream-watch.yml` | Mondays, or by hand | one issue listing the packages here that void-packages now has (clients get those from the official repository) |
+
+Builds run in `ghcr.io/void-linux/void-glibc-full` as an unprivileged user, set up like
+void-packages' own CI (`ci/setup.sh`). Templates are code, so:
+
+- **No secrets on GitHub.** CI never signs or uploads. The signing key stays in pass.
+- **Pull request builds are thrown away.** They run unreviewed code, from a commit that may
+  differ from what gets merged. They use `pull_request`, never `pull_request_target`, with a
+  read-only token.
+- **`./repo.sh release` only takes what `build.yml` built on `master`.** It downloads the
+  artifacts with `gh`, and before anything is staged checks each package's attestation:
+  built by `.github/workflows/build.yml` of `GH_REPO`, ref `refs/heads/master`, from that
+  commit (which must be on `origin/master`), on a GitHub-hosted runner. It also refuses
+  packages that `srcpkgs/` doesn't have, arches outside `ARCHS` and `restricted=yes`. Then
+  it stages, signs and uploads like `publish`.
+- CI builds only what a push changed. After several merges, release each commit
+  (`./repo.sh release <commit>`), or run `build.yml` by hand with the package list and
+  release that.
+
+Repository settings this relies on (GitHub, Settings → Actions → General):
+
+- **Fork pull request workflows:** require approval for all external contributors, so a
+  stranger's pull request doesn't run until you've looked at it.
+- **Workflow permissions:** allow GitHub Actions to create pull requests (update check).
+- Optionally protect `master` and require the `Check` jobs.
 
 ## Website
 
@@ -120,7 +166,7 @@ the build.
 
 ## Test
 
-`tests/test.sh` runs offline and touches neither pass nor the server. It checks:
+`tests/test.sh` runs offline and touches neither pass, the server nor GitHub. It checks:
 
 - against a fake worktree with a stub `xbps-src`: `xdistdir` resolves to this directory,
   the overlay replaces upstream's template directory, `common/shlibs` is appended once, the
@@ -132,3 +178,9 @@ the build.
 - the website beside the repository after publish and remove: every package with its arches,
   versions and source package, the fingerprint, the request link, and markup in a
   description escaped
+- `release` with a stub `gh`: a failed attestation, a package not in `srcpkgs/`, a commit not
+  on `origin/master` and a missing CI run each abort with nothing uploaded; a verified build
+  is published, signed and on the website, with the attestation checked for workflow, ref,
+  commit and GitHub-hosted runner
+- `ci/changed.sh`: changed packages between two commits, subpackage changes counted for the
+  source package, deleted packages skipped

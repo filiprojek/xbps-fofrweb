@@ -1,0 +1,128 @@
+# Pull request checks: tests, template lint and a test build of the changed packages for
+# x86_64 and aarch64. Runs untrusted code, so: pull_request (never pull_request_target),
+# read-only token, no secrets, nothing kept. Released packages come from build.yml instead.
+name: Check
+
+on:
+  pull_request:
+  workflow_dispatch: # also started by update-check.yml for its pull requests
+
+permissions: {}
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_DIR: /build/void-packages
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container: ghcr.io/void-linux/void-glibc-full
+    defaults:
+      run:
+        shell: sudo -Eu builder env HOME=/build sh -e {0}
+    steps:
+      - name: Prepare container
+        shell: sh -e {0}
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y bash git sudo xtools rsync openssl openssh python3 shellcheck
+          useradd -G xbuilder -M builder
+          mkdir -p /build && chown builder:builder /build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Own workspace
+        shell: sh -e {0}
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Shellcheck
+        run: shellcheck repo.sh xbps-src config.sh tests/test.sh ci/*.sh
+      - name: Offline test
+        run: tests/test.sh
+
+  lint:
+    name: Lint templates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container: ghcr.io/void-linux/void-glibc-full
+    defaults:
+      run:
+        shell: sudo -Eu builder env HOME=/build sh -e {0}
+    steps:
+      - name: Prepare container
+        shell: sh -e {0}
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y git sudo xtools
+          useradd -G xbuilder -M builder
+          mkdir -p /build && chown builder:builder /build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Own workspace
+        shell: sh -e {0}
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: xlint
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base=${BASE:-$(git merge-base origin/master HEAD)}
+          rv=0
+          for pkg in $(ci/changed.sh "$base" HEAD); do
+            echo "xlint $pkg"
+            xlint "srcpkgs/$pkg/template" || rv=1
+          done
+          exit "$rv"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64] # aarch64 cross-compiled on x86_64
+    container:
+      image: ghcr.io/void-linux/void-glibc-full
+      options: --privileged
+      volumes:
+        - /dev:/dev
+    defaults:
+      run:
+        shell: sudo -Eu builder env HOME=/build sh -e {0}
+    steps:
+      - name: Prepare container
+        shell: sh -e {0}
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y bash git sudo
+          useradd -G xbuilder -M builder
+          mkdir -p /build && chown builder:builder /build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Own workspace
+        shell: sh -e {0}
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Build changed packages
+        env:
+          ARCH: ${{ matrix.arch }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base=${BASE:-$(git merge-base origin/master HEAD)}
+          ci/build.sh "$ARCH" "$base" HEAD

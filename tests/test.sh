@@ -6,7 +6,10 @@
 # xbps-create, a throwaway signing key and a local directory instead of the server; at the end the
 # result is served over HTTP and xbps-install -S checks the signature like a client.
 # Part 3: the website, generated on publish/remove beside the repository directory.
-# Needs xbps, xtools, git, openssl, rsync, python3 (3.14+). Touches neither pass nor the server.
+# Part 4: repo.sh release with a stub gh (CI run lookup, artifact download, attestation
+# verification) and ci/changed.sh on a git fixture.
+# Needs xbps, xtools, git, openssl, ssh-keygen (openssh), rsync, python3 (3.14+). Touches neither pass, the server
+# nor GitHub.
 set -eu
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -34,7 +37,7 @@ export STUB_LOG="$t/stub.log"
 o=$t/overlay
 mkdir -p "$o/srcpkgs/hello" "$o/srcpkgs/hello-data" "$o/common"
 cp "$here/repo.sh" "$here/xbps-src" "$here/config.sh" "$here/.gitignore" "$o/"
-cp -R "$here/site" "$o/"
+cp -R "$here/site" "$here/ci" "$o/"
 printf 'pkgname=hello\nversion=1.0\nrevision=1\n' > "$o/srcpkgs/hello/template"
 ln -s hello "$o/srcpkgs/hello-doc"
 printf 'pkgname=hello-data\nversion=1.0\nrevision=1\narchs=noarch\n' > "$o/srcpkgs/hello-data/template"
@@ -199,6 +202,128 @@ grep -q 'hello-1.1_1' "$t/out" || { cat "$t/out"; fail "list lacks hello-1.1_1";
 grep -q 'hello-1.0_1' "$t/out" || { cat "$t/out"; fail "list lacks aarch64 hello-1.0_1"; }
 if grep -q 'hello-doc' "$t/out"; then cat "$t/out"; fail "list still shows hello-doc"; fi
 ok "list: $native at 1.1, aarch64 at 1.0, hello-doc gone"
+
+# Part 4: repo.sh release. The overlay gets an origin with master; a stub gh serves one CI
+# run per commit ($t/gh/run-<sha> holds its id; $t/gh/run-default "<id> <sha>" is the newest
+# successful run on master), downloads $t/gh/artifacts/<id>/ and fails attestation for files
+# listed in $t/gh/bad. Every gh call is logged.
+gitq init -q --bare "$t/origin.git"
+gitq -C "$o" remote add origin "$t/origin.git"
+gitq -C "$o" push -q origin HEAD:refs/heads/master
+sha=$(git -C "$o" rev-parse HEAD)
+mkdir -p "$t/gh" "$t/bin"
+: > "$t/gh/bad"
+cat > "$t/bin/gh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$GH_STUB/log"
+case "$1 $2" in
+"run list")
+	case " $* " in
+	*" --commit "*)
+		while [ $# -gt 0 ]; do
+			if [ "$1" = --commit ] && [ -f "$GH_STUB/run-$2" ]; then cat "$GH_STUB/run-$2"; fi
+			shift
+		done ;;
+	*) if [ -f "$GH_STUB/run-default" ]; then cat "$GH_STUB/run-default"; fi ;;
+	esac ;;
+"run download")
+	id=$3
+	while [ $# -gt 0 ]; do [ "$1" = -D ] && dir=$2; shift; done
+	cp -R "$GH_STUB/artifacts/$id/." "$dir/" ;;
+"attestation verify")
+	! grep -qx "${3##*/}" "$GH_STUB/bad" ;;
+*) echo "gh stub: unexpected: $*" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$t/bin/gh"
+export GH="$t/bin/gh" GH_STUB="$t/gh" GH_REPO=test/repo
+artifact() { # <run id> <pkgver> <arch>: a package built "by CI" for that run
+	mkdir -p "$t/gh/artifacts/$1/binpkgs-$3"
+	mkpkg "$2" "$3"
+	mv "$binpkgs/$2.$3.xbps" "$t/gh/artifacts/$1/binpkgs-$3/"
+}
+rel_fails() { # <why> <args>...: release must fail and upload nothing new
+	why=$1; shift
+	if "$o/repo.sh" release "$@" > "$t/out" 2>&1; then cat "$t/out"; fail "release accepted: $why"; fi
+	lacks "hello-1.2_1.$native.xbps"
+}
+echo 42 > "$t/gh/run-$sha"
+echo "42 $sha" > "$t/gh/run-default"
+artifact 42 hello-1.2_1 "$native"
+artifact 42 hello-1.2_1 aarch64
+
+# 12. a failed attestation stops the release before anything is staged or uploaded
+echo "hello-1.2_1.aarch64.xbps" > "$t/gh/bad"
+rel_fails "failed attestation"
+grep -q 'attestation failed\|not verified' "$t/out" || { cat "$t/out"; fail "no attestation error shown"; }
+[ ! -e "$STAGING/hello-1.2_1.$native.xbps" ] || fail "staged despite a failed attestation"
+: > "$t/gh/bad"
+ok "release: failed attestation, nothing uploaded"
+
+# 13. packages that are not in the overlay are refused, even when attested
+artifact 42 evil-1.0_1 "$native"
+rel_fails "package not in srcpkgs/"
+grep -q 'evil' "$t/out" || { cat "$t/out"; fail "foreign package not named"; }
+rm "$t/gh/artifacts/42/binpkgs-$native/evil-1.0_1.$native.xbps"
+ok "release: package not in the overlay refused"
+
+# 14. a commit that is not on origin/master is refused
+gitq -C "$o" commit -q --allow-empty -m unpushed
+unpushed=$(git -C "$o" rev-parse HEAD)
+echo 42 > "$t/gh/run-$unpushed"
+rel_fails "commit not on origin/master" "$unpushed"
+# the same when it is the newest CI build (e.g. its commit was force-pushed away)
+echo "42 $unpushed" > "$t/gh/run-default"
+rel_fails "newest CI build not on origin/master"
+echo "42 $sha" > "$t/gh/run-default"
+gitq -C "$o" reset -q --hard "$sha"
+ok "release: commit not on origin/master refused"
+
+# 15. no successful CI run (for the commit, or at all)
+rm "$t/gh/run-$sha" "$t/gh/run-default"
+rel_fails "no CI run for the commit" "$sha"
+rel_fails "no CI run at all"
+echo 42 > "$t/gh/run-$sha"
+echo "42 $sha" > "$t/gh/run-default"
+ok "release: no CI run refused"
+
+# 16. without arguments: the newest successful CI build on master is published and signed;
+# attestation checked against the master build of exactly its commit, on GitHub-hosted runners
+: > "$t/gh/log"
+repo release
+have "hello-1.2_1.$native.xbps"
+have "hello-1.2_1.$native.xbps.sig2"
+have hello-1.2_1.aarch64.xbps.sig2
+lacks "hello-1.1_1.$native.xbps"
+for want in "--source-digest $sha" "--source-ref refs/heads/master" \
+	"--signer-workflow test/repo/.github/workflows/build.yml" "--deny-self-hosted-runners"; do
+	[ "$(grep -c -- "attestation verify .*$want" "$t/gh/log")" = 2 ] ||
+		{ cat "$t/gh/log"; fail "attestation not verified with $want for both files"; }
+done
+site_has "p['hello']['versions'] == {'$native': '1.2_1', 'aarch64': '1.2_1'}" ||
+	{ cat "$t/out" "$t/packages.json"; fail "site not updated by release"; }
+ok "release: verified CI build published, signed, site updated"
+
+# 17. ci/changed.sh: changed source packages between two commits (subpackage -> source,
+# files/ count, deleted packages skipped)
+c=$t/changed
+mkdir -p "$c/srcpkgs/a" "$c/srcpkgs/b/files" "$c/srcpkgs/d"
+for p in a b d; do echo "pkgname=$p" > "$c/srcpkgs/$p/template"; done
+echo x > "$c/srcpkgs/b/files/x"
+gitq -C "$c" init -q
+gitq -C "$c" add -A
+gitq -C "$c" commit -q -m base
+base=$(git -C "$c" rev-parse HEAD)
+echo 'version=2' >> "$c/srcpkgs/a/template"
+echo y > "$c/srcpkgs/b/files/x"
+mkdir -p "$c/srcpkgs/e" && echo pkgname=e > "$c/srcpkgs/e/template"
+ln -s e "$c/srcpkgs/e-devel"
+git -C "$c" rm -q -r srcpkgs/d
+gitq -C "$c" add -A
+gitq -C "$c" commit -q -m change
+got=$(cd "$c" && "$o/ci/changed.sh" "$base" HEAD | tr '\n' ' ')
+[ "$got" = "a b e " ] || fail "ci/changed.sh: got '$got', want 'a b e '"
+ok "ci/changed.sh: a b e (subpackage resolved, deleted skipped)"
 
 # 10. a client syncs over HTTP: signed repository, key fingerprint as repo.sh reports it
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')

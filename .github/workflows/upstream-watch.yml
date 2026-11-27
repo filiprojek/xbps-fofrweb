@@ -1,0 +1,26 @@
+# Weekly: keep one issue listing the packages here that official void-packages now has.
+name: Upstream watch
+
+on:
+  schedule:
+    - cron: '41 5 * * 1' # Mondays 05:41 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  upstream-watch:
+    name: Upstream watch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare with void-packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ci/upstream-watch.sh

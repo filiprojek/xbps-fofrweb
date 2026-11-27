@@ -1,0 +1,57 @@
+# Weekly: look for new upstream versions (xbps-src update-check) and open a pull request per
+# package with the bump and checksum, or an issue when the checksum can't be generated.
+name: Update check
+
+on:
+  schedule:
+    - cron: '17 5 * * 1' # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: update-check
+
+env:
+  BUILD_DIR: /build/void-packages
+
+jobs:
+  update-check:
+    name: Update check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push update/<pkg> branches
+      pull-requests: write
+      issues: write
+      actions: write # start check.yml on the new pull requests
+    container:
+      image: ghcr.io/void-linux/void-glibc-full
+      options: --privileged # xgensum fetches inside the build chroot
+      volumes:
+        - /dev:/dev
+    defaults:
+      run:
+        shell: sudo -Eu builder env HOME=/build sh -e {0}
+    steps:
+      - name: Prepare container
+        shell: sh -e {0}
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y bash git sudo xtools github-cli
+          useradd -G xbuilder -M builder
+          mkdir -p /build && chown builder:builder /build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # credentials kept: the job pushes update/<pkg> branches
+      - name: Own workspace
+        shell: sh -e {0}
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Set up build environment
+        run: ci/setup.sh
+      - name: Check for updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: ci/update-check.sh

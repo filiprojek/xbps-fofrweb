@@ -31,5 +31,9 @@ SITE_REMOTE=${SITE_REMOTE-$_site_default}
 REPO_URL=${REPO_URL:-https://xbps.fofrweb.net/current}         # what clients put into xbps.d
 SOURCE_URL=${SOURCE_URL:-https://github.com/fofrweb/xbps-packages}  # this repository on GitHub
 
+# repo.sh release: packages built by GitHub CI, downloaded and verified with the gh CLI
+GH=${GH:-gh}
+GH_REPO=${GH_REPO:-${SOURCE_URL#https://github.com/}}               # owner/name on GitHub
+
 # Serialises everything that rewrites or builds in the worktree (hostdir is gitignored there)
 BUILD_LOCK=$BUILD_DIR/hostdir/.xbps-fofrweb.lock

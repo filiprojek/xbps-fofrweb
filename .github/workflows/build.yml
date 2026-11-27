@@ -1,0 +1,105 @@
+# Release build: after a merge to master, build the changed packages from exactly that
+# commit, attest their provenance and keep them as artifacts. Nothing is signed or published
+# here: `./repo.sh release` downloads them, verifies the attestations (this workflow, master,
+# this commit, GitHub-hosted runner), then signs and uploads locally. Its name is part of
+# that check, so keep the file at .github/workflows/build.yml.
+name: Build
+
+on:
+  push:
+    branches: [master]
+    paths: ['srcpkgs/**']
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: Source packages to build, space separated (empty = changed by the last commit)
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: build-${{ github.sha }}
+
+env:
+  BUILD_DIR: /build/void-packages
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64] # aarch64 cross-compiled on x86_64
+    container:
+      image: ghcr.io/void-linux/void-glibc-full
+      options: --privileged
+      volumes:
+        - /dev:/dev
+    defaults:
+      run:
+        shell: sudo -Eu builder env HOME=/build sh -e {0}
+    steps:
+      - name: Prepare container
+        shell: sh -e {0}
+        run: |
+          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
+          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
+          xbps-install -Syu xbps && xbps-install -yu
+          xbps-install -y bash git sudo
+          useradd -G xbuilder -M builder
+          mkdir -p /build && chown builder:builder /build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Own workspace
+        shell: sh -e {0}
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Build
+        env:
+          ARCH: ${{ matrix.arch }}
+          BEFORE: ${{ github.event.before }}
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          if [ -n "$PACKAGES" ]; then
+            # shellcheck disable=SC2086
+            ci/build.sh "$ARCH" -- $PACKAGES
+          else
+            # new branch or force push: compare with the parent instead
+            if ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then BEFORE=HEAD^; fi
+            ci/build.sh "$ARCH" "$BEFORE" HEAD
+          fi
+      - name: Collect packages
+        id: collect
+        shell: sh -e {0}
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p out
+          # this arch only (a cross build also leaves host packages); noarch from the native job
+          for f in "$BUILD_DIR"/hostdir/binpkgs/*."$ARCH".xbps; do [ -f "$f" ] && cp "$f" out/; done
+          if [ "$ARCH" = x86_64 ]; then
+            for f in "$BUILD_DIR"/hostdir/binpkgs/*.noarch.xbps; do [ -f "$f" ] && cp "$f" out/; done
+          fi
+          if [ -f "$BUILD_DIR/packages.txt" ]; then cp "$BUILD_DIR/packages.txt" out/; fi
+          ls -l out
+          if ls out/*.xbps > /dev/null 2>&1; then echo built=yes >> "$GITHUB_OUTPUT"; fi
+      - name: Attest provenance
+        if: steps.collect.outputs.built == 'yes'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/*.xbps
+      - name: Upload packages
+        if: steps.collect.outputs.built == 'yes'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binpkgs-${{ matrix.arch }}
+          path: out/
+          retention-days: 30
+          if-no-files-found: error

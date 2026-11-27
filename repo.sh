@@ -11,6 +11,9 @@
 #   build <pkg>...         build source packages for every arch in ARCHS
 #   publish [<pkg>...]     add built packages (default: all of srcpkgs/) to the repository,
 #                          sign and upload
+#   release [<commit>]     the same with packages built by GitHub CI (build.yml) for a commit
+#                          on origin/master (default: the newest successful CI build there),
+#                          after verifying their build attestations
 #   remove <name>...       drop packages (binary package names) from the repository, upload
 #   pull                   refresh the local copy of the published repository
 #   list                   show what the repository holds, per arch
@@ -28,9 +31,11 @@ here=$(cd "$(dirname "$0")" && pwd)
 key=
 tmpkey=
 sitedir=
+dldir=
 cleanup() {
 	if [ -n "$tmpkey" ]; then rm -f "$tmpkey"; fi
 	if [ -n "$sitedir" ]; then rm -rf "$sitedir"; fi
+	if [ -n "$dldir" ]; then rm -rf "$dldir"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -64,6 +69,22 @@ pkg_names() {
 			printf '%s\n' "${l##*/}"
 		fi
 	done
+}
+
+# Source package of a binary package name: itself, or the target of its subpackage symlink;
+# empty when srcpkgs/ has no such package
+source_of() {
+	if [ -L "$here/srcpkgs/$1" ]; then
+		readlink "$here/srcpkgs/$1"
+	elif [ -f "$here/srcpkgs/$1/template" ]; then
+		printf '%s\n' "$1"
+	fi
+}
+
+no_restricted() {
+	if grep -q '^restricted=yes' "$here/srcpkgs/$1/template" && [ "$ALLOW_RESTRICTED" != yes ]; then
+		die "$1 has restricted=yes (may not be redistributed); ALLOW_RESTRICTED=yes to publish anyway"
+	fi
 }
 
 is_noarch() { grep -Eq '^archs=["'\'']?noarch' "$here/srcpkgs/$1/template"; }
@@ -165,16 +186,28 @@ cmd_pull() {
 	mkdir -p "$STAGING"
 	remote_mkdir
 	rsync -rt --delete "$REMOTE/" "$STAGING/"
+	sync_repodata "$REMOTE/" "$STAGING/"
 }
 
+# The indexes by content: rsync's quick check (size and mtime in seconds) misses a rewritten
+# index of the same size within the same second
+sync_repodata() {
+	rsync -rtO --checksum --delay-updates --include='*-repodata' --exclude='*' "$1" "$2"
+}
+
+# In an order that keeps the served repository consistent for clients: new packages and
+# signatures first (names are unique per version, so the quick check is safe), then the
+# indexes, then deleting what they no longer list.
+# -O: no times on directories, which only their owner may set (shared group directories)
 push() {
 	for r in "$STAGING"/*-repodata; do
 		[ -f "$r" ] || die "no repodata in $STAGING, refusing to upload"
 		break
 	done
 	msg "uploading to $REMOTE"
-	# -O: no times on directories, which only their owner may set (shared group directories)
-	rsync -rtO --delay-updates --delete-after "$STAGING/" "$REMOTE/"
+	rsync -rtO --delay-updates --exclude='*-repodata' "$STAGING/" "$REMOTE/"
+	sync_repodata "$STAGING/" "$REMOTE/"
+	rsync -rO --delete --existing --ignore-existing "$STAGING/" "$REMOTE/"
 	push_site
 }
 
@@ -187,7 +220,7 @@ push_site() {
 	python3 -I "$here/site/gen.py" --repo "$STAGING" --archs "$ARCHS" \
 		--repo-url "$REPO_URL" --source-url "$SOURCE_URL" --srcpkgs "$here/srcpkgs" --out "$sitedir"
 	msg "uploading website to $SITE_REMOTE"
-	rsync -rtO --chmod=Fa+r --delay-updates "$sitedir/" "$SITE_REMOTE/"
+	rsync -rtO --checksum --chmod=Fa+r --delay-updates "$sitedir/" "$SITE_REMOTE/"
 }
 
 cmd_site() {
@@ -231,9 +264,7 @@ cmd_publish() {
 	[ $# -gt 0 ] || die "srcpkgs/ is empty, nothing to publish"
 	for pkg; do
 		need_srcpkg "$pkg"
-		if grep -q '^restricted=yes' "$here/srcpkgs/$pkg/template" && [ "$ALLOW_RESTRICTED" != yes ]; then
-			die "$pkg has restricted=yes (may not be redistributed); ALLOW_RESTRICTED=yes to publish anyway"
-		fi
+		no_restricted "$pkg"
 	done
 	binpkgs=$BUILD_DIR/hostdir/binpkgs
 	need_remote
@@ -246,17 +277,75 @@ cmd_publish() {
 				[ -f "$f" ] && [ "$(file_name "$f")" = "$name" ] || continue
 				case " $ARCHS noarch " in *" $(file_arch "$f") "*) ;; *) continue ;; esac
 				found=1
-				if [ ! -e "$STAGING/${f##*/}" ]; then
-					cp "$f" "$STAGING/"
-					msg "adding ${f##*/}"
-				fi
+				stage "$f"
 			done
 		done
 	done
 	[ -n "$found" ] || die "nothing built for: $* (run: $0 build $*)"
+	index_sign_push
+}
+
+# A package file into the staged repository, unless that pkgver is there already
+stage() {
+	if [ ! -e "$STAGING/${1##*/}" ]; then
+		cp "$1" "$STAGING/"
+		msg "adding ${1##*/}"
+	fi
+}
+
+index_sign_push() {
 	for arch in $ARCHS; do index_arch "$arch"; done
 	sign_packages
 	push
+}
+
+# Packages built by .github/workflows/build.yml for a commit on origin/master. Each file must
+# carry a GitHub build attestation from that workflow, for that commit, on master, made on a
+# GitHub-hosted runner; any failure aborts before anything is staged. Signing stays local.
+cmd_release() {
+	[ $# -le 1 ] || die "usage: release [<commit>]"
+	need_remote
+	git -C "$here" fetch -q origin master
+	if [ $# -eq 1 ]; then
+		sha=$(git -C "$here" rev-parse -q --verify "$1^{commit}") || die "unknown commit: $1"
+		run=$("$GH" run list -R "$GH_REPO" --workflow build.yml --commit "$sha" \
+			--status success --limit 1 --json databaseId --jq '.[0].databaseId')
+		[ -n "$run" ] || die "no successful build.yml run for $sha in $GH_REPO"
+	else
+		# CI builds only commits that change srcpkgs/, so not necessarily the tip
+		line=$("$GH" run list -R "$GH_REPO" --workflow build.yml --branch master \
+			--status success --limit 1 --json databaseId,headSha \
+			--jq '.[0] | "\(.databaseId) \(.headSha)"')
+		[ -n "$line" ] || die "no successful build.yml run on master in $GH_REPO"
+		run=${line%% *} sha=${line#* }
+	fi
+	git -C "$here" merge-base --is-ancestor "$sha" origin/master ||
+		die "$sha is not on origin/master: only merged commits are released"
+	dldir=$(mktemp -d "${TMPDIR:-/tmp}/xbps-fofrweb-release.XXXXXX")
+	msg "downloading packages of CI run $run (commit $sha)"
+	"$GH" run download "$run" -R "$GH_REPO" -D "$dldir/run"
+	find "$dldir/run" -type f -name '*.xbps' | sort > "$dldir/files"
+	[ -s "$dldir/files" ] || die "CI run $run has no packages"
+	while read -r f; do
+		name=$(file_name "$f")
+		case " $ARCHS noarch " in
+		*" $(file_arch "$f") "*) ;;
+		*) die "${f##*/}: arch $(file_arch "$f") is not in ARCHS" ;;
+		esac
+		src=$(source_of "$name")
+		[ -n "$src" ] || die "${f##*/}: $name is not a package of srcpkgs/"
+		no_restricted "$src"
+		"$GH" attestation verify "$f" -R "$GH_REPO" \
+			--signer-workflow "$GH_REPO/.github/workflows/build.yml" \
+			--source-ref refs/heads/master --source-digest "$sha" \
+			--deny-self-hosted-runners > /dev/null ||
+			die "attestation failed for ${f##*/}: not verified as built by build.yml from $sha on master"
+		msg "verified ${f##*/}"
+	done < "$dldir/files"
+	with_key
+	cmd_pull
+	while read -r f; do stage "$f"; done < "$dldir/files"
+	index_sign_push
 }
 
 cmd_remove() {
@@ -311,7 +400,7 @@ fi
 command=$1
 shift
 case $command in
-setup | update | import | build | publish | remove | pull | list | site | keygen | fingerprint)
+setup | update | import | build | publish | release | remove | pull | list | site | keygen | fingerprint)
 	"cmd_$command" "$@" ;;
 *) die "unknown command: $command (run without arguments for help)" ;;
 esac
