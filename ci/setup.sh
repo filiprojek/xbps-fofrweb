@@ -1,7 +1,7 @@
 #!/bin/sh
 # CI: a void-packages checkout as BUILD_DIR, configured like void-packages' own CI
-# (common/travis/prepare.sh, set_mirror.sh) but without XBPS_ALLOW_RESTRICTED, and
-# bootstrapped through the overlay's ./xbps-src. Runs as a non-root member of xbuilder in a
+# (common/travis/prepare.sh, set_mirror.sh) and bootstrapped through the overlay's
+# ./xbps-src, which also allows restricted templates (XBPS_ALLOW_RESTRICTED). Runs as a non-root member of xbuilder in a
 # privileged ghcr.io/void-linux/void-glibc-full container; BUILD_DIR comes from the workflow.
 set -eu
 

@@ -82,10 +82,12 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           mkdir -p out
-          # this arch only (a cross build also leaves host packages); noarch from the native job
-          for f in "$BUILD_DIR"/hostdir/binpkgs/*."$ARCH".xbps; do [ -f "$f" ] && cp "$f" out/; done
+          # this arch only (a cross build also leaves host packages); noarch from the native job;
+          # repository=nonfree templates land in binpkgs/nonfree/
+          b="$BUILD_DIR/hostdir/binpkgs"
+          for f in "$b"/*."$ARCH".xbps "$b"/nonfree/*."$ARCH".xbps; do [ -f "$f" ] && cp "$f" out/; done
           if [ "$ARCH" = x86_64 ]; then
-            for f in "$BUILD_DIR"/hostdir/binpkgs/*.noarch.xbps; do [ -f "$f" ] && cp "$f" out/; done
+            for f in "$b"/*.noarch.xbps "$b"/nonfree/*.noarch.xbps; do [ -f "$f" ] && cp "$f" out/; done
           fi
           if [ -f "$BUILD_DIR/packages.txt" ]; then cp "$BUILD_DIR/packages.txt" out/; fi
           ls -l out

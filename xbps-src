@@ -59,5 +59,12 @@ if [ -f "$here/common/shlibs" ]; then
 	cat "$here/common/shlibs" >> "$BUILD_DIR/common/shlibs"
 fi
 
+# Restricted templates (restricted=yes) are built like any other: this repository publishes
+# them on purpose. Their licences may forbid redistribution, which is the publisher's call.
+# In etc/conf (gitignored in void-packages), since xbps-src starts the build chroot with an
+# empty environment and only reads its config file there
+if ! grep -qx 'XBPS_ALLOW_RESTRICTED=yes' "$BUILD_DIR/etc/conf" 2>/dev/null; then
+	echo 'XBPS_ALLOW_RESTRICTED=yes' >> "$BUILD_DIR/etc/conf"
+fi
 cd "$BUILD_DIR"
 exec ./xbps-src "$@"
