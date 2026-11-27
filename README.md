@@ -1,4 +1,4 @@
-# xbps-fofrweb
+# xbps-packages
 
 Unofficial Void Linux package repository: my own packages and ones not in the official repo.
 This repository holds the templates and the build/publish tooling. The packages are served at
