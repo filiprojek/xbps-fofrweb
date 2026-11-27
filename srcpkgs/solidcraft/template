@@ -1,6 +1,6 @@
 # Template file for 'solidcraft'
 pkgname=solidcraft
-version=0.49.1
+version=0.50.0
 revision=1
 archs="x86_64* aarch64*"
 build_style=cargo
@@ -16,7 +16,9 @@ license="(MIT OR Apache-2.0) AND custom:SolidCraft-Brand"
 homepage="https://solidcraft.io"
 changelog="https://github.com/tangency-labs/solidcraft/releases"
 distfiles="https://github.com/tangency-labs/solidcraft/archive/refs/tags/v${version}.tar.gz"
-checksum=84224d0da704c4187c17989e186497e00c4190ed82d0b99bf60b6bde10afaa65
+checksum=30430b02b66531d4ce3b24efd523f69c9b36736b0e6a2f393b66fa00cec1040c
+# ~20 tests fail upstream too (tests/KNOWN_FAILING_TESTS) and the suite expects
+# cargo nextest with its filter; plain cargo test also runs the slow tests
 make_check=no
 
 export ZSTD_SYS_USE_PKG_CONFIG=1
