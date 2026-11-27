@@ -18,7 +18,6 @@ REMOTE=${REMOTE:-}                                             # rsync target (h
 PASS_ENTRY=${PASS_ENTRY:-xbps/signing-key}                     # unencrypted RSA PEM inside pass
 SIGNED_BY=${SIGNED_BY:-fofrweb.net xbps repository <admin@fofrweb.net>}
 SIGNING_KEY_FILE=${SIGNING_KEY_FILE:-}                         # PEM file to use instead of pass
-ALLOW_RESTRICTED=${ALLOW_RESTRICTED:-no}                       # yes: publish restricted=yes packages
 
 # Website (site/gen.py), uploaded with every publish/remove. SITE_REMOTE defaults to the
 # directory above REMOTE, so the page is at the web root and the repository below it;

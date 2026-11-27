@@ -81,12 +81,6 @@ source_of() {
 	fi
 }
 
-no_restricted() {
-	if grep -q '^restricted=yes' "$here/srcpkgs/$1/template" && [ "$ALLOW_RESTRICTED" != yes ]; then
-		die "$1 has restricted=yes (may not be redistributed); ALLOW_RESTRICTED=yes to publish anyway"
-	fi
-}
-
 is_noarch() { grep -Eq '^archs=["'\'']?noarch' "$here/srcpkgs/$1/template"; }
 
 # Name and arch from a package file name: foo-1.2_1.x86_64.xbps -> foo / x86_64
@@ -167,12 +161,14 @@ cmd_build() {
 			if is_noarch "$pkg" && [ "$arch" != "$native" ]; then
 				continue
 			fi
-			msg "building $pkg for $arch"
-			if [ "$arch" = "$native" ]; then
-				"$here/xbps-src" pkg "$pkg"
-			else
-				"$here/xbps-src" -a "$arch" pkg "$pkg"
+			if [ "$arch" = "$native" ]; then set --; else set -- -a "$arch"; fi
+			# a template's archs= may exclude this arch (e.g. archs="x86_64")
+			if ! "$here/xbps-src" "$@" show-avail "$pkg" > /dev/null 2>&1; then
+				msg "skipping $pkg for $arch: not available for that arch"
+				continue
 			fi
+			msg "building $pkg for $arch"
+			"$here/xbps-src" "$@" pkg "$pkg"
 		done
 	done
 }
@@ -262,10 +258,7 @@ cmd_publish() {
 		set -- $(overlay_pkgs)
 	fi
 	[ $# -gt 0 ] || die "srcpkgs/ is empty, nothing to publish"
-	for pkg; do
-		need_srcpkg "$pkg"
-		no_restricted "$pkg"
-	done
+	for pkg; do need_srcpkg "$pkg"; done
 	binpkgs=$BUILD_DIR/hostdir/binpkgs
 	need_remote
 	with_key
@@ -273,7 +266,8 @@ cmd_publish() {
 	found=
 	for pkg; do
 		for name in $(pkg_names "$pkg"); do
-			for f in "$binpkgs"/*.xbps; do
+			# repository=nonfree templates land in binpkgs/nonfree/; here it is one repository
+			for f in "$binpkgs"/*.xbps "$binpkgs"/nonfree/*.xbps; do
 				[ -f "$f" ] && [ "$(file_name "$f")" = "$name" ] || continue
 				case " $ARCHS noarch " in *" $(file_arch "$f") "*) ;; *) continue ;; esac
 				found=1
@@ -334,7 +328,6 @@ cmd_release() {
 		esac
 		src=$(source_of "$name")
 		[ -n "$src" ] || die "${f##*/}: $name is not a package of srcpkgs/"
-		no_restricted "$src"
 		"$GH" attestation verify "$f" -R "$GH_REPO" \
 			--signer-workflow "$GH_REPO/.github/workflows/build.yml" \
 			--source-ref refs/heads/master --source-digest "$sha" \

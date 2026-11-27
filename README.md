@@ -95,8 +95,12 @@ Entirely local:
 - **`nocross` packages** can't be cross-compiled for aarch64. Build them under qemu instead:
   install `qemu-user-static` (binfmt), run `./xbps-src -A aarch64 binary-bootstrap` once,
   then `./xbps-src -A aarch64 pkg foo` and `./repo.sh publish foo`.
-- **`restricted=yes`** templates are refused by `publish`, because their licence may forbid
-  redistribution. `ALLOW_RESTRICTED=yes` overrides that.
+- **`restricted=yes`** templates (e.g. spotify) are built, released and published like any
+  other: `./xbps-src` sets `XBPS_ALLOW_RESTRICTED`, and `repository=nonfree` packages are
+  taken from `hostdir/binpkgs/nonfree/` into the one repository. Their licences may forbid
+  redistribution, so publishing them is your call.
+- **Arch-limited templates** (`archs="x86_64"`) are skipped on the other arches by `build`,
+  locally and in CI.
 - **Signing on a machine you reach over SSH:** pass there needs your local gpg-agent
   forwarded, since the smartcard stays local. `SIGNING_KEY_FILE=<pem>` signs with a key file
   instead of pass.
@@ -121,7 +125,7 @@ void-packages' own CI (`ci/setup.sh`). Templates are code, so:
   artifacts with `gh`, and before anything is staged checks each package's attestation:
   built by `.github/workflows/build.yml` of `GH_REPO`, ref `refs/heads/master`, from that
   commit (which must be on `origin/master`), on a GitHub-hosted runner. It also refuses
-  packages that `srcpkgs/` doesn't have, arches outside `ARCHS` and `restricted=yes`. Then
+  packages that `srcpkgs/` doesn't have and arches outside `ARCHS`. Then
   it stages, signs and uploads like `publish`.
 - CI builds only what a push changed. After several merges, release each commit
   (`./repo.sh release <commit>`), or run `build.yml` by hand with the package list and

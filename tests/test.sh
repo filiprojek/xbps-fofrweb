@@ -54,8 +54,20 @@ printf 'pkgname=hello\nversion=0.9\nrevision=1\n' > "$b/srcpkgs/hello/template"
 echo patch > "$b/srcpkgs/hello/patches/upstream.patch"
 printf 'pkgname=other\nversion=1\nrevision=1\n' > "$b/srcpkgs/other/template"
 printf 'libc.so.6 glibc-2.41_1\n' > "$b/common/shlibs"
-# shellcheck disable=SC2016 # $PWD/$* belong to the stub, expanded when it runs
-printf '#!/bin/sh\nprintf "%%s|%%s\\n" "$PWD" "$*" >> "$STUB_LOG"\n' > "$b/xbps-src"
+mkdir -p "$b/etc"
+echo XBPS_CHROOT_CMD=uchroot > "$b/etc/conf" # a worktree setting the shim must keep
+# Stub xbps-src: logs "<dir>|<args>"; show-avail says a package is unavailable for an arch
+# when "<arch> <pkg>" is a line of $STUB_LOG.unavail
+cat > "$b/xbps-src" <<'EOF'
+#!/bin/sh
+printf '%s|%s\n' "$PWD" "$*" >> "$STUB_LOG"
+arch=$(xbps-uhelper arch)
+if [ "$1" = -a ]; then arch=$2; shift 2; fi
+if [ "$1" = show-avail ]; then
+	if grep -qx "$arch $2" "$STUB_LOG.unavail" 2>/dev/null; then exit 1; fi
+fi
+exit 0
+EOF
 chmod +x "$b/xbps-src"
 echo /hostdir > "$b/.gitignore"
 gitq -C "$b" init -q
@@ -79,7 +91,12 @@ cmp -s "$o/srcpkgs/hello/template" "$b/srcpkgs/hello/template" || fail "overlay 
 "$o/xbps-src" show hello
 [ "$(grep -c '^libhello' "$b/common/shlibs")" = 1 ] || fail "overlay shlibs not appended exactly once"
 grep -q '^libc.so.6' "$b/common/shlibs" || fail "upstream shlibs lost"
-ok "xbps-src: overlay replaces upstream dir, shlibs appended once, args passed"
+# restricted templates allowed through etc/conf (the build chroot starts with env -i, so an
+# environment variable doesn't reach it), added once, the worktree's own settings kept
+[ "$(grep -cx 'XBPS_ALLOW_RESTRICTED=yes' "$b/etc/conf")" = 1 ] ||
+	{ cat "$b/etc/conf"; fail "etc/conf: XBPS_ALLOW_RESTRICTED=yes not set exactly once"; }
+grep -qx 'XBPS_CHROOT_CMD=uchroot' "$b/etc/conf" || fail "etc/conf: existing settings lost"
+ok "xbps-src: overlay replaces upstream dir, shlibs appended once, args passed, restricted allowed"
 
 # 3. helper symlinks for xi / xgensum, ignored by git
 [ "$(readlink "$o/hostdir")" = "$b/hostdir" ] || fail "hostdir link"
@@ -104,6 +121,16 @@ grep -qx "$b|-a aarch64 pkg hello" "$STUB_LOG" || fail "no aarch64 build of hell
 grep -qx "$b|pkg hello-data" "$STUB_LOG" || fail "no build of hello-data"
 if grep -q 'aarch64 pkg hello-data' "$STUB_LOG"; then fail "noarch hello-data built twice"; fi
 ok "repo.sh build: $native + aarch64, noarch once"
+
+# 5b. a package not available for an arch (archs="x86_64") is skipped there, not an error
+: > "$STUB_LOG"
+echo "aarch64 hello" > "$STUB_LOG.unavail"
+"$o/repo.sh" build hello > "$t/out" 2>&1 || { cat "$t/out"; fail "build failed on an unavailable arch"; }
+grep -qx "$b|pkg hello" "$STUB_LOG" || fail "native build skipped too"
+if grep -q -- '-a aarch64 pkg hello' "$STUB_LOG"; then fail "built for an arch the package excludes"; fi
+grep -q 'skipping hello for aarch64' "$t/out" || { cat "$t/out"; fail "skip not reported"; }
+rm "$STUB_LOG.unavail"
+ok "repo.sh build: arch the package excludes skipped"
 
 # Part 2: publishing
 binpkgs=$b/hostdir/binpkgs
@@ -203,6 +230,20 @@ grep -q 'hello-1.0_1' "$t/out" || { cat "$t/out"; fail "list lacks aarch64 hello
 if grep -q 'hello-doc' "$t/out"; then cat "$t/out"; fail "list still shows hello-doc"; fi
 ok "list: $native at 1.1, aarch64 at 1.0, hello-doc gone"
 
+# 9b. a restricted template with repository=nonfree: xbps-src puts it in binpkgs/nonfree/,
+# publish takes it from there into the one public repository, like any other package
+mkdir -p "$o/srcpkgs/hello-nonfree" "$binpkgs/nonfree"
+printf 'pkgname=hello-nonfree\nversion=1.0\nrevision=1\nrestricted=yes\nrepository=nonfree\n' \
+	> "$o/srcpkgs/hello-nonfree/template"
+mkpkg hello-nonfree-1.0_1 "$native"
+mv "$binpkgs/hello-nonfree-1.0_1.$native.xbps" "$binpkgs/nonfree/"
+repo publish hello-nonfree
+have "hello-nonfree-1.0_1.$native.xbps"
+have "hello-nonfree-1.0_1.$native.xbps.sig2"
+lacks nonfree
+site_has "'hello-nonfree' in p" || fail "restricted package not on the website"
+ok "publish: restricted package from binpkgs/nonfree/, signed, on the website"
+
 # Part 4: repo.sh release. The overlay gets an origin with master; a stub gh serves one CI
 # run per commit ($t/gh/run-<sha> holds its id; $t/gh/run-default "<id> <sha>" is the newest
 # successful run on master), downloads $t/gh/artifacts/<id>/ and fails attestation for files
@@ -251,6 +292,7 @@ echo 42 > "$t/gh/run-$sha"
 echo "42 $sha" > "$t/gh/run-default"
 artifact 42 hello-1.2_1 "$native"
 artifact 42 hello-1.2_1 aarch64
+artifact 42 hello-nonfree-1.1_1 "$native" # restricted: released like any other
 
 # 12. a failed attestation stops the release before anything is staged or uploaded
 echo "hello-1.2_1.aarch64.xbps" > "$t/gh/bad"
@@ -295,10 +337,11 @@ have "hello-1.2_1.$native.xbps"
 have "hello-1.2_1.$native.xbps.sig2"
 have hello-1.2_1.aarch64.xbps.sig2
 lacks "hello-1.1_1.$native.xbps"
+have "hello-nonfree-1.1_1.$native.xbps.sig2"
 for want in "--source-digest $sha" "--source-ref refs/heads/master" \
 	"--signer-workflow test/repo/.github/workflows/build.yml" "--deny-self-hosted-runners"; do
-	[ "$(grep -c -- "attestation verify .*$want" "$t/gh/log")" = 2 ] ||
-		{ cat "$t/gh/log"; fail "attestation not verified with $want for both files"; }
+	[ "$(grep -c -- "attestation verify .*$want" "$t/gh/log")" = 3 ] ||
+		{ cat "$t/gh/log"; fail "attestation not verified with $want for all three files"; }
 done
 site_has "p['hello']['versions'] == {'$native': '1.2_1', 'aarch64': '1.2_1'}" ||
 	{ cat "$t/out" "$t/packages.json"; fail "site not updated by release"; }
