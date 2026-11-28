@@ -22,6 +22,19 @@ checksum=30430b02b66531d4ce3b24efd523f69c9b36736b0e6a2f393b66fa00cec1040c
 make_check=no
 
 export ZSTD_SYS_USE_PKG_CONFIG=1
+# The line tables upstream keeps for crash reports only cost memory and time here:
+# xbps-src strips the binaries anyway
+export CARGO_PROFILE_RELEASE_DEBUG=0
+
+pre_build() {
+	# The aarch64 cross build (thin LTO of several large crates at once) ran out of the CI
+	# runner's 16 GB with one job per CPU. Set here: the rust build helper resets
+	# CARGO_BUILD_JOBS to XBPS_MAKEJOBS after the template is read
+	if [ "$CROSS_BUILD" ]; then
+		export CARGO_BUILD_JOBS=2
+		msg_normal "$pkgver: cross build with CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS\n"
+	fi
+}
 
 do_install() {
 	local _appid=io.tangencylabs.solidcraft _s
